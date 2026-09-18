@@ -1,18 +1,12 @@
 import cv2
 import mediapipe as mp
-
-try:
-    import roboticstoolbox as rtb
-    from spatialmath import SE3
-    import numpy as np
-    POINTING_LIBS_AVAILABLE = True
-except ImportError:
-    POINTING_LIBS_AVAILABLE = False
+from pointing_ik import PointingIKHandler
 
 COLOR_WORKSPACE_IDLE = (52, 45, 42)
 COLOR_WORKSPACE_ACTIVE = (220, 157, 0)
 COLOR_LABEL_TEXT = (255, 255, 255)
 COLOR_ACCENT = (48, 100, 242)
+COLOR_INDEX_TIP = (0, 255, 0)
 
 LEFT_HAND_MODE_MAP = {
     (0, 1, 0, 0, 0): "DOF1",
@@ -39,13 +33,8 @@ class Camera:
             min_tracking_confidence=min_tracking_confidence
         )
 
-        self.pointing_enabled = POINTING_LIBS_AVAILABLE
-        if self.pointing_enabled:
-            self.robot = rtb.models.DH.Puma560()
-            self.q_current = self.robot.qz
-        else:
-            self.robot = None
-            self.q_current = None
+        self.pointing_ik = PointingIKHandler()
+        self.pointing_enabled = self.pointing_ik.enabled
 
     def get_finger_states(self, hand_landmarks, hand_label):
         fingers = []
@@ -107,12 +96,12 @@ class Camera:
             "left": {
                 "x1": margin_x, "y1": top_y,
                 "x2": int(w / 2) - mid_gap, "y2": bottom_y,
-                "color": COLOR_WORKSPACE_IDLE, "label": "WORKSPACE KIRI"
+                "color": COLOR_WORKSPACE_IDLE, "label": "TANGAN KIRI (NOMOR DOF: 1/2/3/4/5/6)"
             },
             "right": {
                 "x1": int(w / 2) + mid_gap, "y1": top_y,
                 "x2": w - margin_x, "y2": bottom_y,
-                "color": COLOR_WORKSPACE_IDLE, "label": "WORKSPACE KANAN"
+                "color": COLOR_WORKSPACE_IDLE, "label": "TANGAN KANAN (MENGGENGGAM / MEMBUKA)"
             },
         }
 
@@ -235,7 +224,7 @@ class Camera:
         }
 
         if not self.pointing_enabled:
-            result["reason"] = "roboticstoolbox / spatialmath belum terinstall"
+            result["reason"] = "pointing_ik / robot_model belum terinstall"
             return result
 
         h, w, _ = frame.shape
@@ -247,48 +236,27 @@ class Camera:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb)
 
-        if results.multi_hand_landmarks:
+        if results.multi_hand_landmarks and results.multi_handedness:
             hand_landmarks = results.multi_hand_landmarks[0]
+            hand_label = results.multi_handedness[0].classification[0].label
 
             self.mp_draw.draw_landmarks(
                 frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS
             )
 
-            wrist = hand_landmarks.landmark[0]
-            wrist_x = int(wrist.x * w)
-            wrist_y = int(wrist.y * h)
-            cv2.circle(frame, (wrist_x, wrist_y), 10, COLOR_ACCENT, -1, cv2.LINE_AA)
+            index_tip = hand_landmarks.landmark[8]
+            tip_x = int(index_tip.x * w)
+            tip_y = int(index_tip.y * h)
+
+            cv2.circle(frame, (tip_x, tip_y), 12, COLOR_INDEX_TIP, -1, cv2.LINE_AA)
+            cv2.putText(frame, "TELUNJUK (EE)", (tip_x + 15, tip_y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_INDEX_TIP, 2, cv2.LINE_AA)
 
             result["detected"] = True
-            result["reason"] = "OK"
+            fingers = self.get_finger_states(hand_landmarks, hand_label)
+            ik_res = self.pointing_ik.compute_pointing_target(index_tip, fingers)
 
-            X = (wrist.x - 0.5) * 0.60
-            Y = (0.5 - wrist.y) * 0.60
-            Z = 0.40
-            result["target_xyz"] = (X, Y, Z)
-
-            target_pose = SE3(X, Y, Z)
-            sol = self.robot.ikine_LM(target_pose, q0=self.q_current)
-
-            if sol.success:
-                self.q_current = sol.q
-                joint_deg = np.degrees(sol.q)
-                result["joint_deg"] = joint_deg
-
-                servo = np.zeros(6)
-                servo[0] = np.clip(joint_deg[0] + 160, 0, 180)
-                servo[1] = np.clip(joint_deg[1] + 110, 0, 180)
-                servo[2] = np.clip(joint_deg[2] + 135, 0, 180)
-                servo[3] = np.clip(joint_deg[3] + 266, 0, 180)
-                servo[4] = np.clip(joint_deg[4] + 100, 0, 180)
-                servo[5] = np.clip(joint_deg[5] + 266, 0, 180)
-                result["servo"] = servo
-
-                T = self.robot.fkine(sol.q)
-                result["ee_pos"] = tuple(T.t)
-                result["ik_success"] = True
-            else:
-                result["reason"] = "IK gagal (target di luar jangkauan)"
+            result.update(ik_res)
         else:
             result["reason"] = "Tangan tidak terdeteksi"
 
@@ -296,7 +264,7 @@ class Camera:
         label_h = 26
         cv2.rectangle(frame, (ws_x1, ws_y1), (ws_x2, ws_y2), color, 3)
         cv2.rectangle(frame, (ws_x1, ws_y1), (ws_x2, ws_y1 + label_h), color, -1)
-        cv2.putText(frame, "WORKSPACE POINTING",
+        cv2.putText(frame, "POINTING (TELUNJUK)",
                     (ws_x1 + 8, ws_y1 + label_h - 7),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_LABEL_TEXT, 2,
                     cv2.LINE_AA)
@@ -304,8 +272,7 @@ class Camera:
         return result
 
     def reset_pointing(self):
-        if self.pointing_enabled:
-            self.q_current = self.robot.qz
+        self.pointing_ik.reset()
 
     def close(self):
         self.hands.close()

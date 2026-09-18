@@ -27,7 +27,6 @@ COL_RED = "#D60000"
 
 FONT_FAMILY = "Arial"
 
-
 class StatCard(tk.Frame):
     def __init__(self, parent, title, initial_value="-"):
         super().__init__(parent, bg=BG_CARD, bd=0, highlightthickness=0)
@@ -70,7 +69,8 @@ class GuiApp(tk.Tk):
         self.mode = "manual"
 
         self.detector = Camera()
-        self.cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+        # self.cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+        self.cap = cv2.VideoCapture(CAMERA_INDEX)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_CAPTURE_W)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_CAPTURE_H)
 
