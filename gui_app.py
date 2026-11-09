@@ -3,10 +3,13 @@ import tkinter as tk
 import cv2
 from PIL import Image, ImageTk
 from camera import Camera
+from serial_com import SerialCom
 
 CAMERA_INDEX = 0
 CAM_CAPTURE_W = 1300
 CAM_CAPTURE_H = 810
+SERIAL_PORT = "/dev/ttyUSB0"
+SERIAL_BAUD = 115200
 SIDEBAR_W = 280
 HEADER_H = 52
 
@@ -60,7 +63,7 @@ class GuiApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Arm Robot Controller")
+        self.title("Arm Robot GUI Controller")
         self.geometry("1280x720")
         self.minsize(900, 560)
         self.configure()
@@ -69,7 +72,8 @@ class GuiApp(tk.Tk):
         self.mode = "manual"
 
         self.detector = Camera()
-        # self.cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+        self.link = SerialCom(SERIAL_PORT, SERIAL_BAUD)
+        self.send_enabled = False
         self.cap = cv2.VideoCapture(CAMERA_INDEX)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_CAPTURE_W)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_CAPTURE_H)
@@ -130,6 +134,13 @@ class GuiApp(tk.Tk):
         self._section_title(self.sidebar, "STATUS").pack(fill=tk.X, pady=(0, 4))
         self.fps_card = StatCard(self.sidebar, "FPS")
         self.fps_card.pack(fill=tk.X, pady=(0, 6))
+
+        self.serial_card = StatCard(self.sidebar, "SERIAL (ARDUINO)", "OFF")
+        self.serial_card.pack(fill=tk.X, pady=(0, 6))
+
+        self.btn_serial = self._make_toggle_button(self.sidebar, "Kirim ke Servo: OFF", self._toggle_serial)
+        self.btn_serial.pack(fill=tk.X, pady=(0, 6))
+        self._style_toggle_button(self.btn_serial, active=False)
 
         self.manual_section = tk.Frame(self.sidebar, bg=BG_SIDEBAR)
         self.manual_section.pack(fill=tk.X)
@@ -226,14 +237,15 @@ class GuiApp(tk.Tk):
 
     def _set_mode(self, mode):
         self.mode = mode
+        self.link.reset_cache()
         if mode == "manual":
             self.pointing_section.pack_forget()
-            self.manual_section.pack(fill=tk.X, after=self.fps_card)
+            self.manual_section.pack(fill=tk.X, after=self.btn_serial)
             self._highlight_mode_button(self.btn_mode_manual)
             self.header_mode_label.config(text="MODE: MANUAL")
         else:
             self.manual_section.pack_forget()
-            self.pointing_section.pack(fill=tk.X, after=self.fps_card)
+            self.pointing_section.pack(fill=tk.X, after=self.btn_serial)
             self._highlight_mode_button(self.btn_mode_pointing)
             self.header_mode_label.config(text="MODE: POINTING")
 
@@ -248,6 +260,29 @@ class GuiApp(tk.Tk):
                     child.pack_configure(padx=16)
             except tk.TclError:
                 continue
+
+    def _toggle_serial(self):
+        if self.send_enabled:
+            self.send_enabled = False
+            self.link.close()
+        else:
+            self.link.reset_cache()
+            self.send_enabled = self.link.open()
+        self._update_serial_button()
+
+    def _update_serial_button(self):
+        label = "Kirim ke Servo: ON" if self.send_enabled else "Kirim ke Servo: OFF"
+        self.btn_serial.config(text=label)
+        self._style_toggle_button(self.btn_serial, active=self.send_enabled)
+
+    def _refresh_serial_ui(self):
+        self.link.poll()
+        text, level = self.link.status()
+        color = {"ok": COL_GREEN, "warn": COL_YELLOW, "error": COL_RED}.get(level)
+        self.serial_card.set_value(text, color)
+        if self.send_enabled and not self.link.is_open:
+            self.send_enabled = False
+            self._update_serial_button()
 
     def _toggle_fullscreen(self):
         self.is_fullscreen = not self.is_fullscreen
@@ -281,7 +316,8 @@ class GuiApp(tk.Tk):
         else:
             self._run_pointing_mode(frame)
 
-        self._render_video(frame)        
+        self._refresh_serial_ui()
+        self._render_video(frame)
         self.after(15, self._update_frame)
 
     def _run_manual_mode(self, frame):
@@ -297,6 +333,9 @@ class GuiApp(tk.Tk):
             self.command_card.set_value(f"BELUM VALID\n{cmd['target']}: kanan harus\nFIST/OPEN PALM", COL_YELLOW)
         else:
             self.command_card.set_value(cmd["reason"], FG_TEXT)
+
+        if self.send_enabled:
+            self.link.update_manual(cmd)
 
     def _run_pointing_mode(self, frame):
         pt = self.detector.process_pointing(frame)
@@ -323,6 +362,9 @@ class GuiApp(tk.Tk):
         color = COL_GREEN if pt["ik_success"] else FG_TEXT
         self.pt_status_card.set_value(pt["reason"], color)
 
+        if self.send_enabled:
+            self.link.update_pointing(pt)
+
     def _render_video(self, frame):
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img_pil = Image.fromarray(frame_rgb)
@@ -342,6 +384,7 @@ class GuiApp(tk.Tk):
         self.video_label.config(image=image_tk)
 
     def destroy(self):
+        self.link.close()
         if self.cap.isOpened():
             self.cap.release()
         self.detector.close()

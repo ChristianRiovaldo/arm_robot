@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 from pointing_ik import PointingIKHandler
+import servo_config as cfg
 
 COLOR_WORKSPACE_IDLE = (52, 45, 42)
 COLOR_WORKSPACE_ACTIVE = (220, 157, 0)
@@ -168,6 +169,7 @@ class Camera:
         result = {
             "active": False,
             "target": None,
+            "servo_no": None,
             "angle": None,
             "reason": "Menunggu 2 tangan",
         }
@@ -189,9 +191,14 @@ class Camera:
 
         result["target"] = mode
 
+        servo_index = DOF_ORDER.index(mode)
+        result["servo_no"] = servo_index + 1
+
         if mode == "GRIPPER":
             result["active"] = True
-            result["angle"] = right["gripper_angle"]
+            result["angle"] = cfg.binary_target(
+                servo_index, right["gripper_angle"] >= 90
+            )
             result["reason"] = "OK"
             return result
 
@@ -199,15 +206,15 @@ class Camera:
 
         if right_fingers == [0, 0, 0, 0, 0]:
             result["active"] = True
-            result["angle"] = 0
+            result["angle"] = cfg.binary_target(servo_index, is_open=False)
             result["reason"] = "OK"
         elif right_fingers == [1, 1, 1, 1, 1]:
             result["active"] = True
-            result["angle"] = 180
+            result["angle"] = cfg.binary_target(servo_index, is_open=True)
             result["reason"] = "OK"
         else:
             result["reason"] = (
-                "Tangan kanan harus MENGGENGGAM (0°) atau TERBUKA (180°)"
+                "Tangan kanan harus MENGGENGGAM (batas min) atau TERBUKA (batas maks)"
             )
 
         return result
