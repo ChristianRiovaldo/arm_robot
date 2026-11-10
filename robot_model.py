@@ -66,7 +66,7 @@ if __name__ == "__main__":
     print(f"\nEE saat semua joint = 0 (pose nol tabel): "
           f"X={p0[0]:.4f}, Y={p0[1]:.4f}, Z={p0[2]:.4f} m")
 
-    tx, ty, tz = 0.05, 0.15, 0.15
+    tx, ty, tz = 0.07, 0.15, 0.25
     print(f"\n[TEST IK 3D] Target: X={tx}m, Y={ty}m, Z={tz}m")
     success, q_rad, servos, ee_pos = arm.inverse_kinematics_3d(tx, ty, tz)
     if success:

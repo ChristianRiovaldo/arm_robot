@@ -4,12 +4,13 @@ import cv2
 from PIL import Image, ImageTk
 from camera import Camera
 from serial_com import SerialCom
+import servo_config as cfg
 
-CAMERA_INDEX = 0
+CAMERA_INDEX = 4
 CAM_CAPTURE_W = 1300
 CAM_CAPTURE_H = 810
-SERIAL_PORT = "/dev/ttyUSB0"
-SERIAL_BAUD = 115200
+SERIAL_PORT = "/dev/ttyUSB0" 
+SERIAL_BAUD = 115200 
 SIDEBAR_W = 280
 HEADER_H = 52
 
@@ -63,7 +64,7 @@ class GuiApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Arm Robot GUI Controller")
+        self.title("Arm Robot Controller")
         self.geometry("1280x720")
         self.minsize(900, 560)
         self.configure()
@@ -73,7 +74,7 @@ class GuiApp(tk.Tk):
 
         self.detector = Camera()
         self.link = SerialCom(SERIAL_PORT, SERIAL_BAUD)
-        self.send_enabled = False
+        self.send_enabled = False  
         self.cap = cv2.VideoCapture(CAMERA_INDEX)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_CAPTURE_W)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_CAPTURE_H)
@@ -86,7 +87,7 @@ class GuiApp(tk.Tk):
         self._set_mode("manual")
 
         if not self.cap.isOpened():
-            self.fps_card.set_value("Kamera tidak terbuka", COL_RED)
+            self.fps_card.set_value("Kamera tidak terbuka\nCek: python main.py --list-cameras", COL_RED)
         
         self._update_frame()
 
@@ -150,6 +151,9 @@ class GuiApp(tk.Tk):
         
         self.command_card = StatCard(self.manual_section, "COMMAND", "MENUNGGU 2 TANGAN")
         self.command_card.pack(fill=tk.X, pady=(0, 4))
+
+        self.servo_rt_card = StatCard(self.manual_section, "SERVO (REALTIME)", "-")
+        self.servo_rt_card.pack(fill=tk.X, pady=(0, 4))
 
         self.pointing_section = tk.Frame(self.sidebar, bg=BG_SIDEBAR)
         self.pointing_section.pack_forget()
@@ -238,6 +242,8 @@ class GuiApp(tk.Tk):
     def _set_mode(self, mode):
         self.mode = mode
         self.link.reset_cache()
+        if self.send_enabled:
+            self.link.halt()
         if mode == "manual":
             self.pointing_section.pack_forget()
             self.manual_section.pack(fill=tk.X, after=self.btn_serial)
@@ -327,15 +333,30 @@ class GuiApp(tk.Tk):
         angle_text = f"{cmd['angle']}\u00b0" if cmd["angle"] is not None else "-"
         self.target_card.set_value(f"Kiri : {target_text}\nKanan: {angle_text}")
 
+        hold = "\nServo diam di posisi terakhir" if self.send_enabled else ""
+
         if cmd["active"]:
             self.command_card.set_value(f"ACTIVE\n{cmd['target']} -> {cmd['angle']} deg", COL_GREEN)
         elif cmd["target"] is not None:
-            self.command_card.set_value(f"BELUM VALID\n{cmd['target']}: kanan harus\nFIST/OPEN PALM", COL_YELLOW)
+            self.command_card.set_value(f"BELUM VALID\n{cmd['target']}: kanan harus\nFIST/OPEN PALM{hold}", COL_YELLOW)
         else:
-            self.command_card.set_value(cmd["reason"], FG_TEXT)
+            self.command_card.set_value(cmd["reason"] + hold, FG_TEXT)
 
         if self.send_enabled:
             self.link.update_manual(cmd)
+
+        self._render_servo_realtime(cmd["servo_no"] if cmd["active"] else None)
+
+    def _render_servo_realtime(self, active_servo_no=None):
+        if not (self.send_enabled and self.link.ready):
+            self.servo_rt_card.set_value("Serial OFF: tekan 'Kirim ke Servo'\nuntuk melihat sudut servo")
+            return
+        lines = []
+        for i, ang in enumerate(self.link.servo_angles):
+            mark = ">" if active_servo_no == i + 1 else "  "
+            val = f"{ang:3d}\u00b0" if ang is not None else " --"
+            lines.append(f"{mark}S{i + 1}: {val}   [{cfg.SERVO_MIN_DEG[i]}-{cfg.SERVO_MAX_DEG[i]}]")
+        self.servo_rt_card.set_value("\n".join(lines))
 
     def _run_pointing_mode(self, frame):
         pt = self.detector.process_pointing(frame)

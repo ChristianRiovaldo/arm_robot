@@ -6,19 +6,23 @@ Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
 const uint8_t NUM_SERVOS = 6;
 const uint8_t FIRST_CHANNEL = 0;
 const uint8_t STEP_DELAY_MS = 15;
-const uint8_t DEG_PER_STEP = 1;
-const bool ECHO_ALL = false;
+const uint8_t DEG_PER_STEP = 1;   
+const bool ECHO_ALL = false; 
+const unsigned long TELEMETRY_MS = 100; 
 
-const uint16_t SERVO_MIN_US[NUM_SERVOS] = { 500,  600,  600,     600,  650,  600};
-const uint16_t SERVO_MAX_US[NUM_SERVOS] = {2500, 2400, 2400,    2400, 2450, 2400};
-const int16_t SERVO_MIN_DEG[NUM_SERVOS] = {   0,   90,   45,       0,  100,   90};
-const int16_t SERVO_MAX_DEG[NUM_SERVOS] = { 180,  180,  150,     180,  180,  180};
+const uint16_t SERVO_MIN_US[NUM_SERVOS] = { 500,  600,  600,     600,  600,  600};
+const uint16_t SERVO_MAX_US[NUM_SERVOS] = {2500, 2400, 2400,    2400, 2400, 2400};
+
+const int16_t SERVO_MIN_DEG[NUM_SERVOS] = {   0,   90,   45,       0,  100,   70};
+const int16_t SERVO_MAX_DEG[NUM_SERVOS] = { 180,  180,  150,     180,  180,  110};
 
 const int UNKNOWN_ANGLE = -32768;
 
-int currentAngle[NUM_SERVOS];
-int targetAngle[NUM_SERVOS];
+int currentAngle[NUM_SERVOS];   
+int targetAngle[NUM_SERVOS];     
 unsigned long lastStepMs = 0;
+unsigned long lastTelemetryMs = 0;
+int reportedAngle[NUM_SERVOS];
 
 char lineBuf[64];
 uint8_t lineLen = 0;
@@ -67,6 +71,27 @@ void updateServos() {
   }
 }
 
+void reportAngles() {
+  if (TELEMETRY_MS == 0) return;
+  unsigned long now = millis();
+  if ((now - lastTelemetryMs) < TELEMETRY_MS) return;
+
+  bool changed = false;
+  for (uint8_t i = 0; i < NUM_SERVOS; i++) {
+    if (currentAngle[i] != reportedAngle[i]) { changed = true; break; }
+  }
+  if (!changed) return;
+
+  lastTelemetryMs = now;
+  Serial.print(F("P"));
+  for (uint8_t i = 0; i < NUM_SERVOS; i++) {
+    reportedAngle[i] = currentAngle[i];
+    Serial.print(F(" "));
+    Serial.print(currentAngle[i] == UNKNOWN_ANGLE ? -1 : currentAngle[i]);
+  }
+  Serial.println();
+}
+
 uint8_t parseInts(char *p, long *out, uint8_t maxN) {
   uint8_t n = 0;
   while (true) {
@@ -94,10 +119,16 @@ void handleLine(char *s) {
   uint8_t n = parseInts(s, v, NUM_SERVOS);
 
   if (cmd == 'H') {
-    for (uint8_t i = 0; i < NUM_SERVOS; i++) {
-      if (currentAngle[i] != UNKNOWN_ANGLE) targetAngle[i] = currentAngle[i];
+    if (n == 0) {
+      for (uint8_t i = 0; i < NUM_SERVOS; i++) targetAngle[i] = currentAngle[i];
+      Serial.println(F("OK halt"));
+    } else if (n == 1 && v[0] >= 1 && v[0] <= NUM_SERVOS) {
+      targetAngle[v[0] - 1] = currentAngle[v[0] - 1];
+      Serial.print(F("OK halt servo "));
+      Serial.println((int)v[0]);
+    } else {
+      Serial.println(F("ERR format H: H  atau  H <servo 1-6>"));
     }
-    Serial.println(F("OK HOLD"));
     return;
   }
 
@@ -168,12 +199,13 @@ void setup() {
   delay(10);
 
   for (uint8_t i = 0; i < NUM_SERVOS; i++) {
-    currentAngle[i] = UNKNOWN_ANGLE;
-    targetAngle[i]  = UNKNOWN_ANGLE;
+    currentAngle[i]  = UNKNOWN_ANGLE;
+    targetAngle[i]   = UNKNOWN_ANGLE;
+    reportedAngle[i] = UNKNOWN_ANGLE;
   }
 
   Serial.println(F("=== SERVO CONTROL (PCA9685) SIAP ==="));
-  Serial.println(F("Perintah: A a1..a6  |  S n sudut  |  H (hold)"));
+  Serial.println(F("Perintah: A a1..a6  |  S n sudut  |  H [n]"));
   for (uint8_t i = 0; i < NUM_SERVOS; i++) {
     Serial.print(F("  Servo "));
     Serial.print(i + 1);
@@ -187,4 +219,5 @@ void setup() {
 void loop() {
   readSerial();
   updateServos();
+  reportAngles();
 }

@@ -12,6 +12,7 @@ class SerialCom:
     BOOT_WAIT_S = 2.0
     MIN_INTERVAL_S = 0.05
     STABLE_FRAMES = 3
+    HALT_AFTER_LOST_FRAMES = 1
 
     def __init__(self, port="/dev/ttyUSB0", baud=115200):
         self.port = port
@@ -22,6 +23,7 @@ class SerialCom:
         self.last_reply = ""
         self._rx = b""
         self._last_send_t = 0.0
+        self.servo_angles = [None] * 6
         self.reset_cache()
 
     @property
@@ -46,6 +48,7 @@ class SerialCom:
         self.error = ""
         self.last_reply = ""
         self._rx = b""
+        self.servo_angles = [None] * 6
         self.ready_at = time.time() + self.BOOT_WAIT_S
         self.reset_cache()
         return True
@@ -57,6 +60,7 @@ class SerialCom:
             except (serial.SerialException, OSError):
                 pass
         self.ser = None
+        self.servo_angles = [None] * 6
 
     def _fail(self, e):
         self.error = f"serial error: {e}"
@@ -67,6 +71,8 @@ class SerialCom:
         self.last_single = {}
         self._pending = None
         self._pending_count = 0
+        self._moving_servo = None
+        self._lost_count = 0
 
     def _write(self, text):
         try:
@@ -89,7 +95,15 @@ class SerialCom:
         *lines, self._rx = self._rx.split(b"\n")
         for ln in lines:
             ln = ln.decode("ascii", errors="ignore").strip()
-            if ln:
+            if ln.startswith("P "):
+                parts = ln.split()[1:]
+                if len(parts) == 6:
+                    try:
+                        vals = [int(p) for p in parts]
+                    except ValueError:
+                        continue
+                    self.servo_angles = [None if v < 0 else v for v in vals]
+            elif ln:
                 self.last_reply = ln
         self._rx = self._rx[-200:]
 
@@ -119,21 +133,53 @@ class SerialCom:
             return True
         return False
 
+    def halt(self, servo_no=None):
+        if not self.ready:
+            return False
+        if servo_no is None:
+            ok = self._write("H")
+            self.last_single.clear()
+            self.last_all = None
+            self._moving_servo = None
+        else:
+            ok = self._write(f"H {servo_no}")
+            self.last_single.pop(servo_no, None)
+            if self._moving_servo == servo_no:
+                self._moving_servo = None
+        self._pending = None
+        self._pending_count = 0
+        return ok
+
     def update_manual(self, cmd):
         if not self.ready:
             return
-        if cmd.get("active") and cmd.get("servo_no") and cmd.get("angle") is not None:
-            key = (cmd["servo_no"], int(cmd["angle"]))
-            if key == self._pending:
-                self._pending_count += 1
-            else:
-                self._pending = key
-                self._pending_count = 1
-            if self._pending_count >= self.STABLE_FRAMES:
-                self.send_single(*key)
-        else:
+
+        valid = bool(cmd.get("active")) and bool(cmd.get("servo_no")) and cmd.get("angle") is not None
+        if not valid:
             self._pending = None
             self._pending_count = 0
+            self._lost_count += 1
+            if self._lost_count >= self.HALT_AFTER_LOST_FRAMES and self._moving_servo is not None:
+                self.halt()
+            return
+
+        self._lost_count = 0
+        servo_no = int(cmd["servo_no"])
+        key = (servo_no, int(cmd["angle"]))
+
+        if self._moving_servo is not None and self._moving_servo != servo_no:
+            self.halt(self._moving_servo)
+
+        if key == self._pending:
+            self._pending_count += 1
+        else:
+            self._pending = key
+            self._pending_count = 1
+
+        if self._pending_count >= self.STABLE_FRAMES:
+            self.send_single(*key)
+            if servo_no in self.last_single:
+                self._moving_servo = servo_no
 
     def update_pointing(self, pt):
         if self.ready and pt.get("ik_success") and pt.get("servo"):

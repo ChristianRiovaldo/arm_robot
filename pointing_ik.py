@@ -1,4 +1,5 @@
 import numpy as np
+
 import servo_config as cfg
 
 try:
@@ -8,8 +9,8 @@ except ImportError as e:
     print(f"[pointing_ik] Mode pointing nonaktif, gagal import robot_model: {e}")
     POINTING_LIBS_AVAILABLE = False
 
-WORKSPACE_CENTER = (0.00, 0.18, 0.20) 
-WORKSPACE_HALF = (0.12, 0.04, 0.05)
+WORKSPACE_CENTER = (0.00, 0.105, 0.27)  # X, Y, Z tengah kotak workspace
+WORKSPACE_HALF = (0.10, 0.055, 0.04)
 
 CAM_EDGE_MARGIN = 0.10
 CAM_DEPTH_RANGE = 0.20
@@ -33,9 +34,9 @@ class PointingIKHandler:
     @staticmethod
     def camera_to_target(x_norm, y_norm, z_rel):
         span = 0.5 - CAM_EDGE_MARGIN
-        u = float(np.clip((x_norm - 0.5) / span, -1.0, 1.0))
+        u = float(np.clip((x_norm - 0.5) / span, -1.0, 1.0)) 
         v = float(np.clip((0.5 - y_norm) / span, -1.0, 1.0))
-        w = float(np.clip(-z_rel / CAM_DEPTH_RANGE, -1.0, 1.0))
+        w = float(np.clip(-z_rel / CAM_DEPTH_RANGE, -1.0, 1.0)) 
 
         cx, cy, cz = WORKSPACE_CENTER
         hx, hy, hz = WORKSPACE_HALF
@@ -68,6 +69,7 @@ class PointingIKHandler:
 
         X, Y, Z = self.camera_to_target(index_tip_landmark.x, index_tip_landmark.y, index_tip_landmark.z)
         result["target_xyz"] = (X, Y, Z)
+
         success, q_rad, servo_deg, ee_pos = self.robot.inverse_kinematics_3d(X, Y, Z, q_initial=self.q_current)
 
         if success:
